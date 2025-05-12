@@ -3,6 +3,7 @@ from flask_cors import CORS
 from supermarktconnector.ah import AHConnector
 from supermarktconnector.jumbo import JumboConnector
 import re
+import difflib  # For fuzzy matching
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
@@ -151,10 +152,54 @@ def process_jumbo_product(product):
         'ingredients': ingredients
     }
 
+def perform_fuzzy_search(products, query, threshold=0.6):
+    """
+    Apply fuzzy search to filter products that are similar to the query
+    Args:
+        products: List of products to filter
+        query: Search query
+        threshold: Similarity threshold (0-1)
+    Returns:
+        List of products that match the fuzzy search
+    """
+    query = query.lower()
+    query_words = query.split()
+    
+    # Pre-filter: Keep products that have at least one word in common
+    filtered_products = []
+    
+    for product in products:
+        product_name = product.get('name', '').lower()
+        product_brand = product.get('brand', '').lower()
+        product_text = f"{product_name} {product_brand}"
+        
+        # Calculate text similarity using difflib
+        similarity = difflib.SequenceMatcher(None, query, product_text).ratio()
+        
+        # Also check if any individual words match
+        word_match = any(word in product_text for word in query_words)
+        
+        # Add product if similarity is above threshold or any words match
+        if similarity >= threshold or word_match:
+            # Add similarity score for sorting
+            product['_similarity'] = similarity
+            filtered_products.append(product)
+    
+    # Sort by similarity (highest first)
+    filtered_products.sort(key=lambda x: x.get('_similarity', 0), reverse=True)
+    
+    # Remove temp similarity score
+    for product in filtered_products:
+        if '_similarity' in product:
+            del product['_similarity']
+    
+    return filtered_products
+
 @app.route('/api/search', methods=['GET'])
 def search_products():
     query = request.args.get('query', '')
     store = request.args.get('store', 'both')
+    use_fuzzy = request.args.get('fuzzy', 'false').lower() == 'true'
     
     if not query:
         return jsonify({'error': 'Query parameter is required'}), 400
@@ -188,6 +233,44 @@ def search_products():
         except Exception as e:
             print(f"Error fetching Jumbo products: {e}")
     
+    # Apply fuzzy search if requested and we have few results
+    if use_fuzzy or len(results) < 5:
+        # If we have few results, try a broader search
+        if len(results) < 5:
+            split_words = query.split()
+            if len(split_words) > 1:
+                # Try searching with just the first word
+                print(f"Few results, trying broader search with: {split_words[0]}")
+                
+                # Albert Heijn broader search
+                if store in ['ah', 'both']:
+                    try:
+                        ah_products = ah_connector.search_products(query=split_words[0], size=25, page=0)
+                        if 'products' in ah_products and len(ah_products['products']) > 0:
+                            for product in ah_products['products']:
+                                processed_product = process_ah_product(product)
+                                # Only add if not already in results
+                                if not any(r['id'] == processed_product['id'] for r in results):
+                                    results.append(processed_product)
+                    except Exception as e:
+                        print(f"Error in broader AH search: {e}")
+                
+                # Jumbo broader search
+                if store in ['jumbo', 'both']:
+                    try:
+                        jumbo_products = jumbo_connector.search_products(query=split_words[0], size=25, page=0)
+                        if 'products' in jumbo_products and 'data' in jumbo_products['products']:
+                            for product in jumbo_products['products']['data']:
+                                processed_product = process_jumbo_product(product)
+                                # Only add if not already in results
+                                if not any(r['id'] == processed_product['id'] for r in results):
+                                    results.append(processed_product)
+                    except Exception as e:
+                        print(f"Error in broader Jumbo search: {e}")
+        
+        # Apply fuzzy matching to all collected results
+        results = perform_fuzzy_search(results, query)
+    
     # Sort by UPF score (lowest first)
     results.sort(key=lambda x: x['upfScore'])
     
@@ -201,7 +284,7 @@ def index():
         'name': 'UPF Checker API',
         'version': '1.0.0',
         'endpoints': {
-            'search': '/api/search?query=SEARCH_TERM&store=STORE_NAME'
+            'search': '/api/search?query=SEARCH_TERM&store=STORE_NAME&fuzzy=true/false'
         }
     })
 
