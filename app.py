@@ -6,83 +6,14 @@ import re
 import difflib  # For fuzzy matching
 
 app = Flask(__name__)
-# Configure CORS properly to allow requests from Netlify
-CORS(app, resources={r"/*": {"origins": ["https://upfchecker.netlify.app", "http://localhost:3000"]}})
+CORS(app)  # Enable CORS for all routes
 
-# Initialize connectors with timeouts
-try:
-    ah_connector = AHConnector(timeout=5)  # 5 second timeout
-except Exception as e:
-    print(f"Error initializing AH connector: {e}")
-    ah_connector = None
-
-try:
-    jumbo_connector = JumboConnector(timeout=5)  # 5 second timeout
-except Exception as e:
-    print(f"Error initializing Jumbo connector: {e}")
-    jumbo_connector = None
+# Initialize connectors
+ah_connector = AHConnector()
+jumbo_connector = JumboConnector()
 
 # Define E-number pattern for UPF score calculation
 e_number_pattern = re.compile(r'E\s*\d{3}[a-z]?', re.IGNORECASE)
-
-# Sample product data for fallback
-SAMPLE_PRODUCTS = [
-    {
-        'id': 'ah1',
-        'name': 'Biologische Tomaten',
-        'brand': 'AH Biologisch',
-        'description': '500g',
-        'price': 2.79,
-        'pricePerUnit': '€13,95/kg',
-        'store': 'ah',
-        'upfScore': 1,
-        'image': 'https://static.ah.nl/dam/product/AHI_43545239383733343337?revLabel=1&rendition=800x800_JPG_Q90'
-    },
-    {
-        'id': 'ah2',
-        'name': 'Biologische Avocado',
-        'brand': 'AH Biologisch',
-        'description': 'Per stuk',
-        'price': 1.99,
-        'pricePerUnit': '€1,99/stuk',
-        'store': 'ah',
-        'upfScore': 1,
-        'image': 'https://static.ah.nl/dam/product/AHI_43545239383733343938?revLabel=1&rendition=800x800_JPG_Q90'
-    },
-    {
-        'id': 'ah3',
-        'name': 'Halfvolle Melk',
-        'brand': 'Campina',
-        'description': '1L',
-        'price': 1.29,
-        'pricePerUnit': '€1,29/L',
-        'store': 'ah',
-        'upfScore': 3,
-        'image': 'https://static.ah.nl/dam/product/AHI_43545239383531333537?revLabel=1&rendition=800x800_JPG_Q90'
-    },
-    {
-        'id': 'jumbo1',
-        'name': 'Volkoren Brood',
-        'brand': 'Jumbo Eigen Merk',
-        'description': '800g',
-        'price': 1.89,
-        'pricePerUnit': '€2,36/kg',
-        'store': 'jumbo',
-        'upfScore': 4,
-        'image': 'https://jumbocoek.centracdn.net/oim/images/s/product/01/31/03/0000000131034/0000000131034_2_800x800.png'
-    },
-    {
-        'id': 'jumbo2',
-        'name': 'Yoghurt Naturel',
-        'brand': 'Zuivelhoeve',
-        'description': '1kg',
-        'price': 2.49,
-        'pricePerUnit': '€2,49/kg',
-        'store': 'jumbo',
-        'upfScore': 2,
-        'image': 'https://jumbocoek.centracdn.net/oim/images/s/product/00/78/88/0000000078889/0000000078889_2_800x800.png'
-    }
-]
 
 def calculate_upf_score(ingredients):
     """
@@ -125,133 +56,113 @@ def calculate_upf_score(ingredients):
 
 def process_ah_product(product):
     """Transform AH product data into a standardized format with UPF score"""
-    try:
-        # Extract basic info
-        product_id = product.get('webshopId', '')
-        name = product.get('title', '')
-        brand = product.get('brand', '')
-        
-        # Price information
-        price_obj = product.get('priceBeforeBonus', product.get('currentPrice', {}))
-        price = price_obj.get('amount', 0) / 100  # Convert cents to euros
-        
-        # Extract unit price
-        unit_price_obj = product.get('unitPriceDescription', '')
-        
-        # Get image URL
-        images = product.get('images', [])
-        image_url = ""
-        if images and len(images) > 0:
-            image_url = images[0].get('url', '')
-        
-        # Get description/quantity
-        description = product.get('packageSizeText', '')
-        
-        # Calculate UPF score
-        ingredients = product.get('ingredients', '')
-        upf_score = calculate_upf_score(ingredients)
-        
-        return {
-            'id': product_id,
-            'name': name,
-            'brand': brand,
-            'description': description,
-            'price': price,
-            'pricePerUnit': unit_price_obj,
-            'store': 'ah',
-            'upfScore': upf_score,
-            'image': image_url,
-            'ingredients': ingredients
-        }
-    except Exception as e:
-        print(f"Error processing AH product: {e}")
-        # Return a minimal product object to avoid breaking the app
-        return {
-            'id': product.get('webshopId', 'unknown'),
-            'name': product.get('title', 'Onbekend product'),
-            'brand': product.get('brand', 'Albert Heijn'),
-            'description': '',
-            'price': 0,
-            'pricePerUnit': '',
-            'store': 'ah',
-            'upfScore': 5,  # Neutrale score
-            'image': '',
-            'ingredients': ''
-        }
+    # Extract basic info
+    product_id = product.get('webshopId', '')
+    name = product.get('title', '')
+    brand = product.get('brand', '')
+    
+    # --- Robust Price Handling --- 
+    price = 0
+    # Prefer priceBeforeBonus if it exists and is a dict
+    price_info = product.get('priceBeforeBonus')
+    if not isinstance(price_info, dict):
+        # Fallback to currentPrice if priceBeforeBonus is not a dict or doesn't exist
+        price_info = product.get('currentPrice')
+
+    # Extract price if we found a valid price dictionary
+    if isinstance(price_info, dict):
+        price = price_info.get('amount', 0) / 100
+    # Handle cases where price might be directly a number (assume cents)
+    elif isinstance(price_info, (int, float)):
+         price = price_info / 100 
+    # --- End Robust Price Handling ---
+    
+    # Extract unit price
+    unit_price_obj = product.get('unitPriceDescription', '')
+    
+    # Get image URL
+    images = product.get('images', [])
+    image_url = ""
+    if images and len(images) > 0:
+        image_url = images[0].get('url', '')
+    
+    # Get description/quantity
+    description = product.get('packageSizeText', '')
+    
+    # Calculate UPF score
+    ingredients = product.get('ingredients', '')
+    upf_score = calculate_upf_score(ingredients)
+    
+    return {
+        'id': product_id,
+        'name': name,
+        'brand': brand,
+        'description': description,
+        'price': price,
+        'pricePerUnit': unit_price_obj,
+        'store': 'ah',
+        'upfScore': upf_score,
+        'image': image_url,
+        'ingredients': ingredients
+    }
 
 def process_jumbo_product(product):
     """Transform Jumbo product data into a standardized format with UPF score"""
+    # Extract basic info
+    product_id = product.get('id', '')
+    name = product.get('title', '')
+    
+    # Price information
+    prices = product.get('prices', {})
+    price_obj = prices.get('price', {})
+    price = price_obj.get('amount', 0) / 100  # Convert cents to euros
+    
+    # Unit price
+    unit_price = prices.get('unitPrice', {})
+    unit = unit_price.get('unit', '')
+    unit_price_amount = unit_price.get('price', {}).get('amount', 0) / 100
+    unit_price_str = f"€{unit_price_amount:.2f}/{unit}" if unit else ""
+    
+    # Get image URL
+    image_info = product.get('imageInfo', {})
+    primary_view = image_info.get('primaryView', [])
+    image_url = ""
+    if primary_view and len(primary_view) > 0:
+        image_url = primary_view[0].get('url', '')
+    
+    # Get description/quantity
+    description = product.get('quantity', '')
+    
+    # Get additional product data for ingredients
+    detailed_product = {}
     try:
-        # Extract basic info
-        product_id = product.get('id', '')
-        name = product.get('title', '')
-        
-        # Price information
-        prices = product.get('prices', {})
-        price_obj = prices.get('price', {})
-        price = price_obj.get('amount', 0) / 100  # Convert cents to euros
-        
-        # Unit price
-        unit_price = prices.get('unitPrice', {})
-        unit = unit_price.get('unit', '')
-        unit_price_amount = unit_price.get('price', {}).get('amount', 0) / 100
-        unit_price_str = f"€{unit_price_amount:.2f}/{unit}" if unit else ""
-        
-        # Get image URL
-        image_info = product.get('imageInfo', {})
-        primary_view = image_info.get('primaryView', [])
-        image_url = ""
-        if primary_view and len(primary_view) > 0:
-            image_url = primary_view[0].get('url', '')
-        
-        # Get description/quantity
-        description = product.get('quantity', '')
-        
-        # Get additional product data for ingredients
-        detailed_product = {}
-        try:
-            detailed_product = jumbo_connector.get_product(product_id)
-        except:
-            pass
-        
-        # Get ingredients and calculate UPF score
-        ingredients = ""
-        if detailed_product and isinstance(detailed_product, dict):
-            ingredients = detailed_product.get('data', {}).get('description', {}).get('ingredients', '')
-        
-        upf_score = calculate_upf_score(ingredients)
-        
-        # Extract brand from title or use empty string
-        brand_parts = name.split()
-        brand = brand_parts[0] if len(brand_parts) > 0 else "Jumbo"
-        
-        return {
-            'id': product_id,
-            'name': name,
-            'brand': brand,
-            'description': description,
-            'price': price,
-            'pricePerUnit': unit_price_str,
-            'store': 'jumbo',
-            'upfScore': upf_score,
-            'image': image_url,
-            'ingredients': ingredients
-        }
-    except Exception as e:
-        print(f"Error processing Jumbo product: {e}")
-        # Return a minimal product object to avoid breaking the app
-        return {
-            'id': product.get('id', 'unknown'),
-            'name': product.get('title', 'Onbekend product'),
-            'brand': "Jumbo",
-            'description': '',
-            'price': 0,
-            'pricePerUnit': '',
-            'store': 'jumbo',
-            'upfScore': 5,  # Neutrale score
-            'image': '',
-            'ingredients': ''
-        }
+        detailed_product = jumbo_connector.get_product(product_id)
+    except:
+        pass
+    
+    # Get ingredients and calculate UPF score
+    ingredients = ""
+    if detailed_product:
+        ingredients = detailed_product.get('data', {}).get('description', {}).get('ingredients', '')
+    
+    upf_score = calculate_upf_score(ingredients)
+    
+    # Extract brand from title or use empty string
+    brand_parts = name.split()
+    brand = brand_parts[0] if len(brand_parts) > 0 else "Jumbo"
+    
+    return {
+        'id': product_id,
+        'name': name,
+        'brand': brand,
+        'description': description,
+        'price': price,
+        'pricePerUnit': unit_price_str,
+        'store': 'jumbo',
+        'upfScore': upf_score,
+        'image': image_url,
+        'ingredients': ingredients
+    }
 
 def perform_fuzzy_search(products, query, threshold=0.6):
     """
@@ -312,18 +223,11 @@ def search_products():
         try:
             print(f"Searching AH for: {query}")
             ah_products = ah_connector.search_products(query=query, size=25, page=0)
-            
-            # Fix: Check if ah_products is a dictionary before using .get()
-            if isinstance(ah_products, dict):
-                product_count = len(ah_products.get('products', []))
-                print(f"AH returned {product_count} products")
-                
-                if 'products' in ah_products and len(ah_products['products']) > 0:
-                    for product in ah_products['products']:
-                        processed_product = process_ah_product(product)
-                        results.append(processed_product)
-            else:
-                print(f"Error: Unexpected response from AH API - {type(ah_products)}")
+            print(f"AH returned {len(ah_products.get('products', []))} products")
+            if 'products' in ah_products and len(ah_products['products']) > 0:
+                for product in ah_products['products']:
+                    processed_product = process_ah_product(product)
+                    results.append(processed_product)
         except Exception as e:
             print(f"Error fetching AH products: {e}")
     
@@ -332,18 +236,12 @@ def search_products():
         try:
             print(f"Searching Jumbo for: {query}")
             jumbo_products = jumbo_connector.search_products(query=query, size=25, page=0)
-            
-            # Fix: Check if jumbo_products is a dictionary
-            if isinstance(jumbo_products, dict) and 'products' in jumbo_products:
-                data_products = jumbo_products.get('products', {}).get('data', [])
-                print(f"Jumbo returned {len(data_products)} products")
-                
-                if 'data' in jumbo_products['products']:
-                    for product in jumbo_products['products']['data']:
-                        processed_product = process_jumbo_product(product)
-                        results.append(processed_product)
-            else:
-                print(f"Error: Unexpected response from Jumbo API - {type(jumbo_products)}")
+            data_products = jumbo_products.get('products', {}).get('data', [])
+            print(f"Jumbo returned {len(data_products)} products")
+            if 'products' in jumbo_products and 'data' in jumbo_products['products']:
+                for product in jumbo_products['products']['data']:
+                    processed_product = process_jumbo_product(product)
+                    results.append(processed_product)
         except Exception as e:
             print(f"Error fetching Jumbo products: {e}")
     
@@ -360,8 +258,7 @@ def search_products():
                 if store in ['ah', 'both']:
                     try:
                         ah_products = ah_connector.search_products(query=split_words[0], size=25, page=0)
-                        # Fix: Add check for dictionary
-                        if isinstance(ah_products, dict) and 'products' in ah_products and len(ah_products['products']) > 0:
+                        if 'products' in ah_products and len(ah_products['products']) > 0:
                             for product in ah_products['products']:
                                 processed_product = process_ah_product(product)
                                 # Only add if not already in results
@@ -374,8 +271,7 @@ def search_products():
                 if store in ['jumbo', 'both']:
                     try:
                         jumbo_products = jumbo_connector.search_products(query=split_words[0], size=25, page=0)
-                        # Fix: Add check for dictionary and products key
-                        if isinstance(jumbo_products, dict) and 'products' in jumbo_products and 'data' in jumbo_products['products']:
+                        if 'products' in jumbo_products and 'data' in jumbo_products['products']:
                             for product in jumbo_products['products']['data']:
                                 processed_product = process_jumbo_product(product)
                                 # Only add if not already in results
@@ -385,8 +281,7 @@ def search_products():
                         print(f"Error in broader Jumbo search: {e}")
         
         # Apply fuzzy matching to all collected results
-        if results:  # Only attempt fuzzy search if we have results
-            results = perform_fuzzy_search(results, query)
+        results = perform_fuzzy_search(results, query)
     
     # Sort by UPF score (lowest first)
     results.sort(key=lambda x: x['upfScore'])
@@ -394,22 +289,6 @@ def search_products():
     print(f"Total results after processing: {len(results)}")
     
     return jsonify({'products': results})
-
-@app.route('/api/sample', methods=['GET'])
-def sample_products():
-    """Return sample product data for testing or when APIs are unavailable"""
-    query = request.args.get('query', '').lower()
-    
-    if not query:
-        return jsonify({'products': SAMPLE_PRODUCTS})
-    
-    # Simple filtering
-    filtered_products = [
-        product for product in SAMPLE_PRODUCTS
-        if query in product['name'].lower() or query in product['brand'].lower()
-    ]
-    
-    return jsonify({'products': filtered_products})
 
 @app.route('/')
 def index():
