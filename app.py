@@ -212,7 +212,7 @@ def search_ah_threaded(query, results_list):
     """Search AH in a separate thread and append results to the list."""
     try:
         print(f"Thread - Searching AH for: {query}")
-        ah_products = ah_connector.search_products(query=query, size=25, page=0)
+        ah_products = ah_connector.search_products(query=query, size=5, page=0)
         print(f"Thread - AH returned {len(ah_products.get('products', []))} products")
         if 'products' in ah_products and len(ah_products['products']) > 0:
             for product in ah_products['products']:
@@ -225,7 +225,7 @@ def search_jumbo_threaded(query, results_list):
     """Search Jumbo in a separate thread and append results to the list."""
     try:
         print(f"Thread - Searching Jumbo for: {query}")
-        jumbo_products = jumbo_connector.search_products(query=query, size=25, page=0)
+        jumbo_products = jumbo_connector.search_products(query=query, size=5, page=0)
         data_products = jumbo_products.get('products', {}).get('data', [])
         print(f"Thread - Jumbo returned {len(data_products)} products")
         if 'products' in jumbo_products and 'data' in jumbo_products['products']:
@@ -260,7 +260,7 @@ def search_products():
 
     # Wait for all threads to complete
     for thread in threads:
-        thread.join() # This will wait indefinitely, might still hit timeout
+        thread.join()
     # --- End Parallel Searches --- 
     
     print(f"Combined results before fuzzy/broad: {len(results)}")
@@ -271,36 +271,32 @@ def search_products():
         if len(results) < 5:
             split_words = query.split()
             if len(split_words) > 1:
-                # Try searching with just the first word
                 print(f"Few results, trying broader search with: {split_words[0]}")
                 
-                # Albert Heijn broader search (run sequentially after initial parallel search)
+                # Albert Heijn broader search
                 if store in ['ah', 'both']:
                     try:
-                        ah_products = ah_connector.search_products(query=split_words[0], size=25, page=0)
+                        ah_products = ah_connector.search_products(query=split_words[0], size=5, page=0)
                         if 'products' in ah_products and len(ah_products['products']) > 0:
                             for product in ah_products['products']:
                                 processed_product = process_ah_product(product)
-                                # Only add if not already in results
                                 if not any(r['id'] == processed_product['id'] for r in results):
                                     results.append(processed_product)
                     except Exception as e:
                         print(f"Error in broader AH search: {e}")
                 
-                # Jumbo broader search (run sequentially after initial parallel search)
+                # Jumbo broader search
                 if store in ['jumbo', 'both']:
                     try:
-                        jumbo_products = jumbo_connector.search_products(query=split_words[0], size=25, page=0)
+                        jumbo_products = jumbo_connector.search_products(query=split_words[0], size=5, page=0)
                         if 'products' in jumbo_products and 'data' in jumbo_products['products']:
                             for product in jumbo_products['products']['data']:
                                 processed_product = process_jumbo_product(product)
-                                # Only add if not already in results
                                 if not any(r['id'] == processed_product['id'] for r in results):
                                     results.append(processed_product)
                     except Exception as e:
                         print(f"Error in broader Jumbo search: {e}")
         
-        # Apply fuzzy matching to all collected results
         results = perform_fuzzy_search(results, query)
     
     # Sort by UPF score (lowest first)
