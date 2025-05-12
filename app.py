@@ -4,6 +4,7 @@ from supermarktconnector.ah import AHConnector
 from supermarktconnector.jumbo import JumboConnector
 import re
 import difflib  # For fuzzy matching
+import threading # For parallel API calls
 
 app = Flask(__name__)
 CORS(app) # Apply CORS to all routes by default
@@ -207,6 +208,33 @@ def perform_fuzzy_search(products, query, threshold=0.6):
     
     return filtered_products
 
+def search_ah_threaded(query, results_list):
+    """Search AH in a separate thread and append results to the list."""
+    try:
+        print(f"Thread - Searching AH for: {query}")
+        ah_products = ah_connector.search_products(query=query, size=25, page=0)
+        print(f"Thread - AH returned {len(ah_products.get('products', []))} products")
+        if 'products' in ah_products and len(ah_products['products']) > 0:
+            for product in ah_products['products']:
+                processed_product = process_ah_product(product)
+                results_list.append(processed_product)
+    except Exception as e:
+        print(f"Thread - Error fetching AH products: {e}")
+
+def search_jumbo_threaded(query, results_list):
+    """Search Jumbo in a separate thread and append results to the list."""
+    try:
+        print(f"Thread - Searching Jumbo for: {query}")
+        jumbo_products = jumbo_connector.search_products(query=query, size=25, page=0)
+        data_products = jumbo_products.get('products', {}).get('data', [])
+        print(f"Thread - Jumbo returned {len(data_products)} products")
+        if 'products' in jumbo_products and 'data' in jumbo_products['products']:
+            for product in jumbo_products['products']['data']:
+                processed_product = process_jumbo_product(product)
+                results_list.append(processed_product)
+    except Exception as e:
+        print(f"Thread - Error fetching Jumbo products: {e}")
+
 @app.route('/api/search', methods=['GET'])
 def search_products():
     query = request.args.get('query', '')
@@ -217,34 +245,26 @@ def search_products():
         return jsonify({'error': 'Query parameter is required'}), 400
     
     results = []
-    
-    # Search Albert Heijn products
+    threads = []
+
+    # --- Start Parallel Searches --- 
     if store in ['ah', 'both']:
-        try:
-            print(f"Searching AH for: {query}")
-            ah_products = ah_connector.search_products(query=query, size=25, page=0)
-            print(f"AH returned {len(ah_products.get('products', []))} products")
-            if 'products' in ah_products and len(ah_products['products']) > 0:
-                for product in ah_products['products']:
-                    processed_product = process_ah_product(product)
-                    results.append(processed_product)
-        except Exception as e:
-            print(f"Error fetching AH products: {e}")
-    
-    # Search Jumbo products
+        ah_thread = threading.Thread(target=search_ah_threaded, args=(query, results))
+        threads.append(ah_thread)
+        ah_thread.start()
+
     if store in ['jumbo', 'both']:
-        try:
-            print(f"Searching Jumbo for: {query}")
-            jumbo_products = jumbo_connector.search_products(query=query, size=25, page=0)
-            data_products = jumbo_products.get('products', {}).get('data', [])
-            print(f"Jumbo returned {len(data_products)} products")
-            if 'products' in jumbo_products and 'data' in jumbo_products['products']:
-                for product in jumbo_products['products']['data']:
-                    processed_product = process_jumbo_product(product)
-                    results.append(processed_product)
-        except Exception as e:
-            print(f"Error fetching Jumbo products: {e}")
+        jumbo_thread = threading.Thread(target=search_jumbo_threaded, args=(query, results))
+        threads.append(jumbo_thread)
+        jumbo_thread.start()
+
+    # Wait for all threads to complete
+    for thread in threads:
+        thread.join() # This will wait indefinitely, might still hit timeout
+    # --- End Parallel Searches --- 
     
+    print(f"Combined results before fuzzy/broad: {len(results)}")
+
     # Apply fuzzy search if requested and we have few results
     if use_fuzzy or len(results) < 5:
         # If we have few results, try a broader search
@@ -254,7 +274,7 @@ def search_products():
                 # Try searching with just the first word
                 print(f"Few results, trying broader search with: {split_words[0]}")
                 
-                # Albert Heijn broader search
+                # Albert Heijn broader search (run sequentially after initial parallel search)
                 if store in ['ah', 'both']:
                     try:
                         ah_products = ah_connector.search_products(query=split_words[0], size=25, page=0)
@@ -267,7 +287,7 @@ def search_products():
                     except Exception as e:
                         print(f"Error in broader AH search: {e}")
                 
-                # Jumbo broader search
+                # Jumbo broader search (run sequentially after initial parallel search)
                 if store in ['jumbo', 'both']:
                     try:
                         jumbo_products = jumbo_connector.search_products(query=split_words[0], size=25, page=0)
