@@ -164,7 +164,9 @@ def search_products():
     # Search Albert Heijn products
     if store in ['ah', 'both']:
         try:
-            ah_products = ah_connector.search_products(query=query, size=10, page=0)
+            print(f"Searching AH for: {query}")
+            ah_products = ah_connector.search_products(query=query, size=25, page=0)
+            print(f"AH returned {len(ah_products.get('products', []))} products")
             if 'products' in ah_products and len(ah_products['products']) > 0:
                 for product in ah_products['products']:
                     processed_product = process_ah_product(product)
@@ -175,7 +177,10 @@ def search_products():
     # Search Jumbo products
     if store in ['jumbo', 'both']:
         try:
-            jumbo_products = jumbo_connector.search_products(query=query, size=10, page=0)
+            print(f"Searching Jumbo for: {query}")
+            jumbo_products = jumbo_connector.search_products(query=query, size=25, page=0)
+            data_products = jumbo_products.get('products', {}).get('data', [])
+            print(f"Jumbo returned {len(data_products)} products")
             if 'products' in jumbo_products and 'data' in jumbo_products['products']:
                 for product in jumbo_products['products']['data']:
                     processed_product = process_jumbo_product(product)
@@ -185,6 +190,8 @@ def search_products():
     
     # Sort by UPF score (lowest first)
     results.sort(key=lambda x: x['upfScore'])
+    
+    print(f"Total results after processing: {len(results)}")
     
     return jsonify({'products': results})
 
