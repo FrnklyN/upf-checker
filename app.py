@@ -6,14 +6,83 @@ import re
 import difflib  # For fuzzy matching
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+# Configure CORS properly to allow requests from Netlify
+CORS(app, resources={r"/*": {"origins": ["https://upfchecker.netlify.app", "http://localhost:3000"]}})
 
-# Initialize connectors
-ah_connector = AHConnector()
-jumbo_connector = JumboConnector()
+# Initialize connectors with timeouts
+try:
+    ah_connector = AHConnector(timeout=5)  # 5 second timeout
+except Exception as e:
+    print(f"Error initializing AH connector: {e}")
+    ah_connector = None
+
+try:
+    jumbo_connector = JumboConnector(timeout=5)  # 5 second timeout
+except Exception as e:
+    print(f"Error initializing Jumbo connector: {e}")
+    jumbo_connector = None
 
 # Define E-number pattern for UPF score calculation
 e_number_pattern = re.compile(r'E\s*\d{3}[a-z]?', re.IGNORECASE)
+
+# Sample product data for fallback
+SAMPLE_PRODUCTS = [
+    {
+        'id': 'ah1',
+        'name': 'Biologische Tomaten',
+        'brand': 'AH Biologisch',
+        'description': '500g',
+        'price': 2.79,
+        'pricePerUnit': '€13,95/kg',
+        'store': 'ah',
+        'upfScore': 1,
+        'image': 'https://static.ah.nl/dam/product/AHI_43545239383733343337?revLabel=1&rendition=800x800_JPG_Q90'
+    },
+    {
+        'id': 'ah2',
+        'name': 'Biologische Avocado',
+        'brand': 'AH Biologisch',
+        'description': 'Per stuk',
+        'price': 1.99,
+        'pricePerUnit': '€1,99/stuk',
+        'store': 'ah',
+        'upfScore': 1,
+        'image': 'https://static.ah.nl/dam/product/AHI_43545239383733343938?revLabel=1&rendition=800x800_JPG_Q90'
+    },
+    {
+        'id': 'ah3',
+        'name': 'Halfvolle Melk',
+        'brand': 'Campina',
+        'description': '1L',
+        'price': 1.29,
+        'pricePerUnit': '€1,29/L',
+        'store': 'ah',
+        'upfScore': 3,
+        'image': 'https://static.ah.nl/dam/product/AHI_43545239383531333537?revLabel=1&rendition=800x800_JPG_Q90'
+    },
+    {
+        'id': 'jumbo1',
+        'name': 'Volkoren Brood',
+        'brand': 'Jumbo Eigen Merk',
+        'description': '800g',
+        'price': 1.89,
+        'pricePerUnit': '€2,36/kg',
+        'store': 'jumbo',
+        'upfScore': 4,
+        'image': 'https://jumbocoek.centracdn.net/oim/images/s/product/01/31/03/0000000131034/0000000131034_2_800x800.png'
+    },
+    {
+        'id': 'jumbo2',
+        'name': 'Yoghurt Naturel',
+        'brand': 'Zuivelhoeve',
+        'description': '1kg',
+        'price': 2.49,
+        'pricePerUnit': '€2,49/kg',
+        'store': 'jumbo',
+        'upfScore': 2,
+        'image': 'https://jumbocoek.centracdn.net/oim/images/s/product/00/78/88/0000000078889/0000000078889_2_800x800.png'
+    }
+]
 
 def calculate_upf_score(ingredients):
     """
@@ -325,6 +394,22 @@ def search_products():
     print(f"Total results after processing: {len(results)}")
     
     return jsonify({'products': results})
+
+@app.route('/api/sample', methods=['GET'])
+def sample_products():
+    """Return sample product data for testing or when APIs are unavailable"""
+    query = request.args.get('query', '').lower()
+    
+    if not query:
+        return jsonify({'products': SAMPLE_PRODUCTS})
+    
+    # Simple filtering
+    filtered_products = [
+        product for product in SAMPLE_PRODUCTS
+        if query in product['name'].lower() or query in product['brand'].lower()
+    ]
+    
+    return jsonify({'products': filtered_products})
 
 @app.route('/')
 def index():
