@@ -6,8 +6,7 @@ import re
 import difflib  # For fuzzy matching
 
 app = Flask(__name__)
-# Explicitly allow all origins
-CORS(app, resources={r"/api/*": {"origins": "*"}})
+CORS(app) # Apply CORS to all routes by default
 
 # Initialize connectors
 ah_connector = AHConnector()
